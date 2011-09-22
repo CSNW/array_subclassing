@@ -7,21 +7,43 @@ var makeSubArray = (function(){
     return value >>> 0;
   }
 
-  function getMaxIndexProperty(object) {
-    var maxIndex = -1, isValidProperty;
+  function compareMaxIndex(object, index) {
+    if (index < -1 || (index + 1 !== MAX_SIGNED_INT_VALUE && hasOwnProperty.call(object, index + 1)))
+      return 1;
+    else if (index >= MAX_SIGNED_INT_VALUE || (index !== -1 && !hasOwnProperty.call(object, index)))
+      return -1;
+    else
+      return 0;
+  }
+
+  function getMaxIndexProperty(object, old_index) {
+    var index = old_index,
+        direction = interval = compareMaxIndex(object, old_index);
+    if (direction == 0)
+      return index;
     
-    for (var prop in object) {
-      
-      isValidProperty = (
-        String(ToUint32(prop)) === prop && 
-        ToUint32(prop) !== MAX_SIGNED_INT_VALUE && 
-        hasOwnProperty.call(object, prop));
-        
-      if (isValidProperty && prop > maxIndex) {
-        maxIndex = prop;
-      }
+    // find low and high by searching from old_index by powers of 2
+    do {
+      old_index = index;
+      interval *= 2;
+      index += interval;
+    } while (compareMaxIndex(object, index) == direction);
+
+    var high = direction == 1 ? index : old_index;
+    var low  = direction == 1 ? old_index : index;
+
+    if (high >= MAX_SIGNED_INT_VALUE)
+      high = MAX_SIGNED_INT_VALUE - 1;
+    if (low < -1)
+      low = -1;
+    
+    // binary search (implementation from underscore's sortedIndex())
+    while (low < high) {
+      var mid = Math.floor((low + high) / 2);
+      // var mid = (low + high) >> 1; // returns negative results for numbers near MAX_SIGNED_INT_VALUE
+      compareMaxIndex(object, mid) == 1 ? low = mid + 1 : high = mid;
     }
-    return maxIndex;
+    return low;
   }
 
   return function(methods) {
@@ -30,16 +52,28 @@ var makeSubArray = (function(){
 
     methods.length = {
       get: function() {
-        var maxIndexProperty = +getMaxIndexProperty(this);
-        return Math.max(length, maxIndexProperty + 1);
+        return getMaxIndexProperty(this, length - 1) + 1;
       },
       set: function(value) {
         var constrainedValue = ToUint32(value);
         if (constrainedValue !== +value) {
           throw new RangeError();
         }
-        for (var i = constrainedValue, len = this.length; i < len; i++) {
+        
+        // optimizate for the common case where a built-in
+        // prototype is setting the length to what it really is after modifications
+        if (compareMaxIndex(this, value) == 0)
+          length = value;
+        
+        var old_len = this.length;
+        for (var i = constrainedValue, len = old_len; i < len; i++) {
           delete this[i];
+        }
+        // the hasOwnProperty() check allows sparse arrays to be made contiguous
+        // via setting the length after-the-fact
+        for (var i = old_len, len = constrainedValue; i < len; i++) {
+          if (!hasOwnProperty.call(this, i))
+            this[i] = undefined;
         }
         length = constrainedValue;
       }
